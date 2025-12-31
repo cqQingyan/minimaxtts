@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card shadow-sm">
+            <div class="card-header bg-white border-bottom-0 pt-4 pb-0 text-center">
+                <h3 class="fw-bold text-primary"><i class="bi bi-mic-fill me-2"></i>MiniMax TTS</h3>
+            </div>
+            <div class="card-body p-4">
+
+                <div id="status-area" class="alert alert-secondary text-center d-none" role="alert">
+                    <span id="status-text">Ready</span>
+                    <div class="progress mt-2 d-none" id="progress-bar-container">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 100%"></div>
+                    </div>
+                </div>
+
+                <!-- Mode Selection -->
+                <div class="mb-4">
+                    <label class="form-label fw-bold">Generation Mode</label>
+                    <div class="btn-group w-100" role="group">
+                        <input type="radio" class="btn-check" name="mode" id="mode-sync" value="sync" checked onchange="toggleMode()">
+                        <label class="btn btn-outline-primary" for="mode-sync">
+                            <i class="bi bi-lightning-fill me-1"></i> Sync (Short Text)
+                        </label>
+                        <input type="radio" class="btn-check" name="mode" id="mode-async" value="async" onchange="toggleMode()">
+                        <label class="btn btn-outline-primary" for="mode-async">
+                            <i class="bi bi-cloud-upload-fill me-1"></i> Async (Long/File)
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Voice & Format Settings -->
+                <div class="row g-3 mb-3">
+                    <div class="col-md-8">
+                        <label for="voice_id" class="form-label">Voice</label>
+                        <select class="form-select" id="voice_id">
+                            {% for voice in voices %}
+                            <option value="{{ voice.id }}">{{ voice.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label for="audio_format" class="form-label">Format</label>
+                        <select class="form-select" id="audio_format">
+                            <option value="mp3" selected>MP3</option>
+                            <option value="wav">WAV</option>
+                            <option value="flac">FLAC</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Advanced Settings (Collapsible) -->
+                <div class="accordion mb-4" id="settingsAccordion">
+                    <div class="accordion-item border-0">
+                        <h2 class="accordion-header" id="headingOne">
+                            <button class="accordion-button collapsed bg-light rounded" type="button" data-bs-toggle="collapse" data-bs-target="#collapseSettings">
+                                <i class="bi bi-sliders me-2"></i> Audio Parameters (Speed, Vol, Pitch)
+                            </button>
+                        </h2>
+                        <div id="collapseSettings" class="accordion-collapse collapse" data-bs-parent="#settingsAccordion">
+                            <div class="accordion-body bg-light rounded mt-1">
+                                <label for="speed" class="form-label">Speed: <span id="speed-val">1.0</span></label>
+                                <input type="range" class="form-range" min="0.5" max="2.0" step="0.1" id="speed" value="1.0" oninput="document.getElementById('speed-val').textContent = this.value">
+
+                                <label for="vol" class="form-label">Volume: <span id="vol-val">1.0</span></label>
+                                <input type="range" class="form-range" min="0.1" max="2.0" step="0.1" id="vol" value="1.0" oninput="document.getElementById('vol-val').textContent = this.value">
+
+                                <label for="pitch" class="form-label">Pitch: <span id="pitch-val">0</span></label>
+                                <input type="range" class="form-range" min="-12" max="12" step="1" id="pitch" value="0" oninput="document.getElementById('pitch-val').textContent = this.value">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- File Upload (Async Only) -->
+                <div id="upload-group" class="mb-4 bg-light p-3 rounded border d-none">
+                    <label for="file-upload" class="form-label text-primary">
+                        <i class="bi bi-file-earmark-text me-1"></i> Upload File (TXT/EPUB)
+                    </label>
+                    <input class="form-control" type="file" id="file-upload" accept=".txt,.epub">
+                    <div class="form-text">Supports TXT and EPUB.</div>
+                </div>
+
+                <!-- Text Input -->
+                <div class="mb-4">
+                    <label for="text" class="form-label">Text Content</label>
+                    <textarea class="form-control" id="text" rows="5" placeholder="Enter text here..."></textarea>
+                    <div class="text-end text-muted small mt-1">
+                        <span id="char-count">0</span> chars
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="d-grid gap-2">
+                    <button id="generate-btn" class="btn btn-primary btn-lg" onclick="startGeneration()">
+                        <i class="bi bi-play-circle-fill me-2"></i>Generate Audio
+                    </button>
+                    <a href="{{ url_for('main.history') }}" class="btn btn-outline-secondary">
+                        <i class="bi bi-clock-history me-2"></i>View History
+                    </a>
+                </div>
+
+                <div id="result-container" class="text-center mt-3"></div>
+
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<script>
+    var socket = io();
+
+    socket.on('task_update', function(data) {
+        console.log("Socket Update:", data);
+        const statusText = document.getElementById('status-text');
+        const progressBar = document.getElementById('progress-bar-container');
+
+        if (data.status === 'success') {
+            statusText.innerHTML = '<i class="bi bi-check-circle-fill text-success me-2"></i>Success!';
+            progressBar.classList.add('d-none');
+            createDownloadLink(data.download_url);
+        } else if (data.status === 'failed') {
+            statusText.innerHTML = '<i class="bi bi-x-circle-fill text-danger me-2"></i>Failed';
+            progressBar.classList.add('d-none');
+            alert('Task failed');
+            document.getElementById('generate-btn').disabled = false;
+        }
+    });
+
+    document.getElementById('text').addEventListener('input', function() {
+        document.getElementById('char-count').innerText = this.value.length;
+    });
+
+    function toggleMode() {
+        const mode = document.querySelector('input[name="mode"]:checked').value;
+        const uploadGroup = document.getElementById('upload-group');
+        const textInput = document.getElementById('text');
+
+        if (mode === 'async') {
+            uploadGroup.classList.remove('d-none');
+            textInput.placeholder = "Enter text manually (concatenated with file if uploaded)...";
+        } else {
+            uploadGroup.classList.add('d-none');
+            textInput.placeholder = "Enter short text for immediate generation...";
+            document.getElementById('file-upload').value = '';
+        }
+    }
+
+    async function startGeneration() {
+        const voiceId = document.getElementById('voice_id').value;
+        const text = document.getElementById('text').value;
+        const mode = document.querySelector('input[name="mode"]:checked').value;
+        const fileInput = document.getElementById('file-upload');
+        const format = document.getElementById('audio_format').value;
+        const speed = document.getElementById('speed').value;
+        const vol = document.getElementById('vol').value;
+        const pitch = document.getElementById('pitch').value;
+
+        const btn = document.getElementById('generate-btn');
+        const statusArea = document.getElementById('status-area');
+        const statusText = document.getElementById('status-text');
+        const progressBar = document.getElementById('progress-bar-container');
+        const resultContainer = document.getElementById('result-container');
+
+        // Reset UI
+        resultContainer.innerHTML = '';
+        statusArea.classList.remove('d-none');
+        statusText.innerText = "Initializing...";
+        btn.disabled = true;
+
+        try {
+            if (mode === 'sync') {
+                if (!text) throw new Error("Please enter text");
+
+                statusText.innerText = "Generating (Sync)...";
+                progressBar.classList.remove('d-none');
+
+                const response = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mode: 'sync', voice_id: voiceId, text: text,
+                        format: format, speed: speed, vol: vol, pitch: pitch
+                    })
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.error || 'Generation failed');
+                }
+
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                createDownloadLink(url, format);
+
+                statusText.innerHTML = '<i class="bi bi-check-circle-fill text-success me-2"></i>Done';
+                progressBar.classList.add('d-none');
+                btn.disabled = false;
+
+            } else {
+                // ASYNC MODE
+                let textFileId = null;
+
+                if (fileInput.files.length > 0) {
+                    statusText.innerText = "Uploading file...";
+                    const formData = new FormData();
+                    formData.append('file', fileInput.files[0]);
+
+                    const upResp = await fetch('/api/upload', { method: 'POST', body: formData });
+                    const upData = await upResp.json();
+                    if (!upResp.ok) throw new Error(upData.error || 'Upload failed');
+
+                    textFileId = upData.file.file_id;
+                }
+
+                if (!text && !textFileId) throw new Error("Please provide text or a file");
+
+                statusText.innerText = "Submitting task...";
+
+                const response = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mode: 'async', voice_id: voiceId,
+                        text: text, text_file_id: textFileId,
+                        format: format, speed: speed, vol: vol, pitch: pitch
+                    })
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Task submission failed');
+
+                statusText.innerHTML = `<i class="bi bi-hourglass-split me-2"></i>Processing (Task ID: ${data.task_id})...`;
+                progressBar.classList.remove('d-none');
+                // Socket will handle the rest
+            }
+
+        } catch (e) {
+            statusArea.classList.add('alert-danger');
+            statusText.innerText = "Error: " + e.message;
+            progressBar.classList.add('d-none');
+            btn.disabled = false;
+        }
+    }
+
+    function createDownloadLink(url, format='mp3') {
+        const resultContainer = document.getElementById('result-container');
+        const link = document.createElement('a');
+        link.href = url;
+        link.className = 'btn btn-success btn-lg shadow';
+        link.download = `audio_${new Date().getTime()}.${format}`;
+        link.target = '_blank';
+        link.innerHTML = `<i class="bi bi-download me-2"></i>Download Audio (.${format})`;
+        resultContainer.appendChild(link);
+    }
+</script>
+{% endblock %}
