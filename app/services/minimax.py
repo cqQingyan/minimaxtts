@@ -1,19 +1,20 @@
 import requests
 import binascii
 from .base import TTSProvider
+from typing import List, Dict, Any, Optional
 
 class MinimaxProvider(TTSProvider):
     API_BASE_URL = "https://api.minimaxi.com"
 
-    def __init__(self, api_key, group_id=None, voices=None):
+    def __init__(self, api_key: str, group_id: Optional[str] = None, voices: Optional[List[Dict[str, str]]] = None) -> None:
         self.api_key = api_key
         self.group_id = group_id
         self.voices = voices or []
 
-    def get_voices(self):
+    def get_voices(self) -> List[Dict[str, str]]:
         return self.voices
 
-    def generate_sync(self, text, voice_id, **kwargs):
+    def generate_sync(self, text: str, voice_id: str, **kwargs: Any) -> bytes:
         if not self.api_key:
              raise ValueError("Missing API Key for MiniMax")
 
@@ -57,7 +58,7 @@ class MinimaxProvider(TTSProvider):
 
         return binascii.unhexlify(hex_audio)
 
-    def upload_file(self, filename, file_stream, mimetype):
+    def upload_file(self, filename: str, file_stream: Any, mimetype: str) -> Dict[str, Any]:
         url = f"{self.API_BASE_URL}/v1/files/upload"
         headers = {
             "Authorization": f"Bearer {self.api_key}"
@@ -74,7 +75,7 @@ class MinimaxProvider(TTSProvider):
         response.raise_for_status()
         return response.json()
 
-    def submit_async(self, text, text_file_id, voice_id, **kwargs):
+    def submit_async(self, text: Optional[str], text_file_id: Optional[str], voice_id: str, **kwargs: Any) -> Dict[str, Any]:
         url = f"{self.API_BASE_URL}/v1/t2a_async_v2"
         if self.group_id:
              url += f"?GroupId={self.group_id}"
@@ -109,7 +110,7 @@ class MinimaxProvider(TTSProvider):
         response.raise_for_status()
         return response.json() # Returns {'task_id': ..., ...}
 
-    def query_async(self, task_id):
+    def query_async(self, task_id: str) -> Dict[str, Any]:
         url = f"{self.API_BASE_URL}/v1/query/t2a_async_query_v2"
         if self.group_id:
              url += f"?GroupId={self.group_id}"
@@ -123,7 +124,7 @@ class MinimaxProvider(TTSProvider):
         response.raise_for_status()
         return response.json()
 
-    def retrieve_file(self, file_id):
+    def retrieve_file(self, file_id: str) -> Dict[str, Any]:
         url = f"{self.API_BASE_URL}/v1/files/retrieve"
         params = {'file_id': file_id}
         headers = {

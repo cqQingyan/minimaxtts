@@ -5,6 +5,7 @@ import uuid
 import time
 from .base import TTSProvider
 from .volcengine_lib import SignerV4, Credentials, Request
+from typing import List, Dict, Any, Optional
 
 class VolcengineProvider(TTSProvider):
     # Standard Speech API endpoint (Sync)
@@ -15,7 +16,7 @@ class VolcengineProvider(TTSProvider):
     ASYNC_SUBMIT_PATH = "/api/v1/tts_async"
     ASYNC_QUERY_PATH = "/api/v1/tts_async"
 
-    def __init__(self, app_id, access_token, secret_key=None, cluster="volcano_tts", voices=None):
+    def __init__(self, app_id: str, access_token: str, secret_key: Optional[str] = None, cluster: str = "volcano_tts", voices: Optional[List[Dict[str, str]]] = None) -> None:
         self.app_id = app_id
         # In Volcengine terminology:
         # Access Token usually = AccessKey (AK)
@@ -27,10 +28,10 @@ class VolcengineProvider(TTSProvider):
         self.service = "speech"
         self.region = "cn-north-1"
 
-    def get_voices(self):
+    def get_voices(self) -> List[Dict[str, str]]:
         return self.voices
 
-    def _sign_and_send(self, method, path, payload):
+    def _sign_and_send(self, method: str, path: str, payload: Dict[str, Any]) -> requests.Response:
         if not self.secret_key:
              headers = {
                 "Authorization": f"Bearer; {self.access_key}",
@@ -55,7 +56,7 @@ class VolcengineProvider(TTSProvider):
         response = requests.request(method, url, data=req.body, headers=req.headers)
         return response
 
-    def generate_sync(self, text, voice_id, **kwargs):
+    def generate_sync(self, text: str, voice_id: str, **kwargs: Any) -> bytes:
         req_id = str(uuid.uuid4())
 
         speed = int(float(kwargs.get('speed', 1.0)) * 10)
@@ -102,12 +103,12 @@ class VolcengineProvider(TTSProvider):
         audio_b64 = resp_json["data"]
         return base64.b64decode(audio_b64)
 
-    def upload_file(self, filename, file_stream, mimetype):
+    def upload_file(self, filename: str, file_stream: Any, mimetype: str) -> Dict[str, Any]:
         # Return content as virtual file ID
         content = file_stream.read().decode('utf-8')
         return {"file_id": "RAW_TEXT:" + base64.b64encode(content.encode('utf-8')).decode('utf-8')}
 
-    def submit_async(self, text, text_file_id, voice_id, **kwargs):
+    def submit_async(self, text: Optional[str], text_file_id: Optional[str], voice_id: str, **kwargs: Any) -> Dict[str, Any]:
         if text_file_id and text_file_id.startswith("RAW_TEXT:"):
             text = base64.b64decode(text_file_id.split(":", 1)[1]).decode('utf-8')
 
@@ -147,7 +148,7 @@ class VolcengineProvider(TTSProvider):
         task_id = resp_json.get("data", {}).get("task_id")
         return {"task_id": task_id, "base_resp": {"status_code": 0}} # Normalize return if needed
 
-    def query_async(self, task_id):
+    def query_async(self, task_id: str) -> Dict[str, Any]:
         payload = {
              "app": {"appid": self.app_id, "token": "access_token", "cluster": self.cluster},
              "request": {
@@ -165,7 +166,7 @@ class VolcengineProvider(TTSProvider):
         # Volcengine: { "code": 3000, "message": "Success", "data": { "audio_url": "...", "task_status": "Success", ... } }
 
         # Default mapping
-        result = {
+        result: Dict[str, Any] = {
             "base_resp": {
                 "status_code": 0 if volc_json.get("code") == 3000 else -1,
                 "status_msg": volc_json.get("message", "Unknown")
@@ -187,7 +188,7 @@ class VolcengineProvider(TTSProvider):
 
         return result
 
-    def retrieve_file(self, file_id):
+    def retrieve_file(self, file_id: str) -> Dict[str, Any]:
         if file_id.startswith("http"):
             return {"file": {"download_url": file_id}}
         raise NotImplementedError("Volcengine retrieve by ID not supported")

@@ -1,10 +1,11 @@
 import json
 import os
 import shutil
+from typing import Any, Dict, Optional, List
 
 CONFIG_FILE = 'config.json'
 
-DEFAULT_CONFIG = {
+DEFAULT_CONFIG: Dict[str, Any] = {
     "active_provider": "minimax",
     "minimax": {
         "api_key": "",
@@ -32,12 +33,12 @@ DEFAULT_CONFIG = {
 }
 
 class ConfigManager:
-    def __init__(self, filepath=CONFIG_FILE):
-        self.filepath = filepath
-        self._config = {}
+    def __init__(self, filepath: str = CONFIG_FILE) -> None:
+        self.filepath: str = filepath
+        self._config: Dict[str, Any] = {}
         self.load()
 
-    def load(self):
+    def load(self) -> None:
         if not os.path.exists(self.filepath):
             self._config = DEFAULT_CONFIG
             self.save()
@@ -52,7 +53,7 @@ class ConfigManager:
         else:
             self._config = data
 
-    def _migrate_v1_to_v2(self, old_data):
+    def _migrate_v1_to_v2(self, old_data: Dict[str, Any]) -> None:
         print("Migrating config from v1 to v2...")
         new_config = DEFAULT_CONFIG.copy()
 
@@ -70,21 +71,21 @@ class ConfigManager:
         self._config = new_config
         self.save()
 
-    def save(self):
+    def save(self) -> None:
         with open(self.filepath, 'w', encoding='utf-8') as f:
             json.dump(self._config, f, indent=4, ensure_ascii=False)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: Any = None) -> Any:
         return self._config.get(key, default)
 
-    def set(self, key, value):
+    def set(self, key: str, value: Any) -> None:
         self._config[key] = value
         self.save()
 
-    def get_all(self):
+    def get_all(self) -> Dict[str, Any]:
         return self._config
 
-    def update(self, new_data):
+    def update(self, new_data: Dict[str, Any]) -> None:
         self._config.update(new_data)
         self.save()
 

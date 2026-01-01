@@ -15,7 +15,7 @@
   <div class="container">
     <a class="navbar-brand" href="{{ url_for('main.index') }}"><i class="bi bi-mic-fill me-2"></i>MiniMax TTS</a>
     <div class="d-flex">
-        {% if current_user.is_authenticated %}
+        {% if current_user is defined and current_user.is_authenticated %}
             <span class="navbar-text me-3">Hi, {{ current_user.username }}</span>
             <a href="{{ url_for('auth.logout') }}" class="btn btn-outline-light btn-sm">Logout</a>
         {% endif %}
