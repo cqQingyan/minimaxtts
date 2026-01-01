@@ -1,104 +1,120 @@
-from flask import Blueprint, render_template, request, jsonify, send_file, current_app, flash, redirect, url_for, abort
-from flask_login import login_required, current_user
-from app.services.minimax import minimax_client
-from app.tasks import submit_async_generation
-from app.utils.validators import validate_input
-from app.utils.file_processor import process_epub_to_text
-from app.models import History, db
-from app.extensions import cache
+from flask import Blueprint, render_template, request, jsonify, send_file
+import io
 import tempfile
 import os
-import io
 import binascii
+from app.config import config_manager
+from app.services.minimax import MinimaxProvider
+from app.services.volcengine_tts import VolcengineProvider
+from app.utils import extract_text_from_epub
 
-bp = Blueprint('main', __name__)
+main = Blueprint('main', __name__)
 
-@bp.route('/')
-@login_required
+def get_provider():
+    config = config_manager.get_all()
+    provider_name = config.get('active_provider', 'minimax')
+
+    if provider_name == 'minimax':
+        return MinimaxProvider(
+            api_key=config['minimax'].get('api_key'),
+            group_id=config['minimax'].get('group_id'),
+            voices=config['voices'].get('minimax', [])
+        )
+    elif provider_name == 'volcengine':
+        return VolcengineProvider(
+            app_id=config['volcengine'].get('app_id'),
+            access_token=config['volcengine'].get('access_token'),
+            secret_key=config['volcengine'].get('secret_key'),
+            cluster=config['volcengine'].get('cluster'),
+            voices=config['voices'].get('volcengine', [])
+        )
+    else:
+        raise ValueError(f"Unknown provider: {provider_name}")
+
+@main.route('/')
 def index():
-    voices = minimax_client.get_voices()
+    provider = get_provider()
+    voices = provider.get_voices()
     return render_template('index.html', voices=voices)
 
-@bp.route('/history')
-@login_required
-def history():
-    # Fetch history for current user, ordered by newest first
-    items = History.query.filter_by(user_id=current_user.id).order_by(History.created_at.desc()).all()
-    return render_template('history.html', items=items)
+@main.route('/admin')
+def admin_page():
+    return render_template('admin.html')
 
-@bp.route('/api/generate', methods=['POST'])
-@login_required
-def generate():
+@main.route('/api/admin/login', methods=['POST'])
+def admin_login():
     data = request.json
-    voice_id = data.get('voice_id')
-    mode = data.get('mode', 'sync')
-    text = data.get('text')
-    text_file_id = data.get('text_file_id')
+    password = data.get('password')
+    if password == config_manager.get('admin_password', 'admin'):
+        return jsonify({'status': 'success'})
+    return jsonify({'status': 'failed', 'message': 'Invalid password'}), 401
 
-    # Optional parameters
-    speed = data.get('speed', 1.0)
-    vol = data.get('vol', 1.0)
-    pitch = data.get('pitch', 0)
-    audio_format = data.get('format', 'mp3')
+@main.route('/api/admin/config', methods=['GET', 'POST'])
+def admin_config():
+    if request.method == 'GET':
+        return jsonify(config_manager.get_all())
 
-    # Validation
-    if not voice_id:
-        return jsonify({'error': 'Missing voice_id'}), 400
+    if request.method == 'POST':
+        new_config = request.json
+        config_manager.update(new_config)
+        return jsonify({'status': 'success'})
 
-    errors = validate_input(text=text)
-    if errors:
-        return jsonify({'error': errors[0]}), 400
+@main.route('/api/check_connection', methods=['POST'])
+def check_connection():
+    # Helper to check connection for current or tested config
+    data = request.json or {}
+    # If data provided, temporarily instantiate provider
+    # Otherwise use current config
 
-    # Get Voice Name for history
-    voices = minimax_client.get_voices()
-    voice_name = next((v['name'] for v in voices if v['id'] == voice_id), voice_id)
+    # We need to determine which provider we are checking.
+    # The frontend should ideally send "provider" and "config"
+    # But existing frontend sends api_key/group_id for MiniMax.
 
-    if mode == 'sync':
-        if not text:
-            return jsonify({'error': 'Missing text for sync mode'}), 400
+    provider_type = data.get('provider')
 
+    try:
+        if provider_type:
+            # Test specific credentials
+            if provider_type == 'minimax':
+                provider = MinimaxProvider(
+                    api_key=data.get('api_key'),
+                    group_id=data.get('group_id'),
+                    voices=[]
+                )
+                voice_id = "audiobook_male_1" # Default test
+            elif provider_type == 'volcengine':
+                provider = VolcengineProvider(
+                    app_id=data.get('app_id'),
+                    access_token=data.get('access_token'),
+                    secret_key=data.get('secret_key'),
+                    cluster=data.get('cluster'),
+                    voices=[]
+                )
+                voice_id = "BV001_streaming" # Default test
+            else:
+                 return jsonify({'status': 'failed', 'message': 'Unknown provider'}), 400
+        else:
+            # Use current configured provider
+            provider = get_provider()
+            voices = provider.get_voices()
+            voice_id = voices[0]['id'] if voices else "unknown"
+
+        # Try to generate a short text
         try:
-            resp_json = minimax_client.generate_sync(
-                text=text, voice_id=voice_id,
-                speed=speed, vol=vol, pitch=pitch, format=audio_format
-            )
-
-            if resp_json.get('base_resp', {}).get('status_code') != 0:
-                 return jsonify({'error': resp_json.get('base_resp', {}).get('status_msg', 'Unknown API Error')}), 400
-
-            hex_audio = resp_json.get('data', {}).get('audio')
-            if not hex_audio:
-                return jsonify({'error': 'No audio data received'}), 500
-
-            audio_binary = binascii.unhexlify(hex_audio)
-
-            # Save sync generation to history as well (optional, but good for tracking)
-            # For now, we won't save the file to disk to keep it simple as sync is usually small,
-            # but we could log the event.
-
-            return send_file(
-                io.BytesIO(audio_binary),
-                mimetype=f'audio/{audio_format}',
-                as_attachment=True,
-                download_name=f'generated_audio.{audio_format}'
-            )
+             # Just generate "test"
+             provider.generate_sync("test", voice_id)
+             return jsonify({'status': 'success', 'message': 'Connection successful'})
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+             return jsonify({'status': 'failed', 'message': str(e)}), 400
 
-    else: # Async
-        try:
-            task_id = submit_async_generation(
-                text=text, text_file_id=text_file_id,
-                voice_id=voice_id, voice_name=voice_name, user_id=current_user.id,
-                speed=speed, vol=vol, pitch=pitch, format=audio_format
-            )
-            return jsonify({'task_id': task_id, 'status': 'processing'})
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        return jsonify({'status': 'failed', 'message': f"Setup Error: {str(e)}"}), 500
 
-@bp.route('/api/upload', methods=['POST'])
-@login_required
-def upload():
+
+@main.route('/api/upload', methods=['POST'])
+def upload_file():
+    provider = get_provider()
+
     if 'file' not in request.files:
         return jsonify({'error': 'No file part'}), 400
 
@@ -106,67 +122,98 @@ def upload():
     if file.filename == '':
         return jsonify({'error': 'No selected file'}), 400
 
-    # Validation
-    errors = validate_input(file=file)
-    if errors:
-        return jsonify({'error': errors[0]}), 400
+    filename = file.filename.lower()
+    file_stream = file.stream
+    mimetype = file.mimetype
 
-    filename = secure_filename(file.filename)
-
-    # Handle EPUB vs TXT
-    if filename.lower().endswith('.epub'):
+    if filename.endswith('.epub'):
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.epub') as temp:
-                file.save(temp.name)
-                temp_path = temp.name
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.epub') as temp_file:
+                file.save(temp_file.name)
+                temp_path = temp_file.name
 
             try:
-                text_content = process_epub_to_text(temp_path)
+                text_content = extract_text_from_epub(temp_path)
             finally:
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
 
             if not text_content:
-                return jsonify({'error': 'Empty or unreadable EPUB'}), 400
+                return jsonify({'error': 'Failed to extract text from EPUB'}), 400
 
-            # Convert to stream for upload
             file_stream = io.BytesIO(text_content.encode('utf-8'))
-            upload_filename = filename.replace('.epub', '.txt')
+            filename = filename.replace('.epub', '.txt')
             mimetype = 'text/plain'
 
         except Exception as e:
-            return jsonify({'error': f"EPUB Error: {str(e)}"}), 500
-    else:
-        file_stream = file.stream
-        upload_filename = filename
-        mimetype = file.mimetype
+            return jsonify({'error': f'EPUB processing failed: {str(e)}'}), 500
 
-    # Upload to MiniMax
     try:
-        resp = minimax_client.upload_file(upload_filename, file_stream, mimetype)
-
-        # Check API response status
-        if resp.get('base_resp', {}).get('status_code') != 0:
-             return jsonify({'error': resp.get('base_resp', {}).get('status_msg', 'Upload failed')}), 400
-
-        return jsonify(resp)
+        # Provider specific upload
+        result = provider.upload_file(filename, file_stream, mimetype)
+        return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@bp.route('/api/task_status', methods=['GET'])
-@login_required
-def check_status():
+@main.route('/api/generate', methods=['POST'])
+def generate():
+    data = request.json
+    provider = get_provider()
+
+    voice_id = data.get('voice_id')
+    mode = data.get('mode', 'sync')
+
+    if not voice_id:
+         return jsonify({'error': 'Missing voice_id'}), 400
+
+    if mode == 'sync':
+        text = data.get('text')
+        if not text:
+             return jsonify({'error': 'Missing text'}), 400
+        try:
+            audio_data = provider.generate_sync(text, voice_id, **data)
+            return send_file(
+                io.BytesIO(audio_data),
+                mimetype='audio/mpeg',
+                as_attachment=True,
+                download_name='generated_audio.mp3'
+            )
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    else:
+        text = data.get('text')
+        text_file_id = data.get('text_file_id')
+        if not text and not text_file_id:
+            return jsonify({'error': 'Missing text or file_id'}), 400
+
+        try:
+            result = provider.submit_async(text, text_file_id, voice_id, **data)
+            return jsonify(result)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+@main.route('/api/query', methods=['GET'])
+def query():
     task_id = request.args.get('task_id')
     if not task_id:
         return jsonify({'error': 'Missing task_id'}), 400
 
-    # Check DB first
-    history = History.query.filter_by(task_id=task_id).first()
-    if history:
-        return jsonify({
-            'status': history.status,
-            'download_url': history.file_path,
-            'voice_name': history.voice_name
-        })
+    provider = get_provider()
+    try:
+        result = provider.query_async(task_id)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-    return jsonify({'status': 'unknown'}), 404
+@main.route('/api/retrieve', methods=['GET'])
+def retrieve():
+    file_id = request.args.get('file_id')
+    if not file_id:
+        return jsonify({'error': 'Missing file_id'}), 400
+
+    provider = get_provider()
+    try:
+        result = provider.retrieve_file(file_id)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
