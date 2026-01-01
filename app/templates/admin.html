@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MiniMax Admin</title>
+    <title>TTS Admin</title>
     <!-- Bootstrap 5 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
@@ -35,27 +35,62 @@
             <button class="btn btn-outline-secondary btn-sm" onclick="logout()">退出</button>
         </div>
 
-        <!-- API Settings -->
-        <h5 class="mb-3 text-primary">API 配置</h5>
-        <div class="row g-3 mb-4">
-            <div class="col-md-6">
-                <label class="form-label">API Key</label>
-                <input type="password" class="form-control" id="api_key">
+        <!-- Provider Selection -->
+        <div class="mb-4">
+            <h5 class="mb-3 text-primary">服务商选择</h5>
+            <select id="active_provider" class="form-select" onchange="toggleProviderSettings()">
+                <option value="minimax">MiniMax</option>
+                <option value="volcengine">火山引擎 (Volcengine)</option>
+            </select>
+        </div>
+
+        <!-- MiniMax Config -->
+        <div id="config-minimax" class="provider-config">
+            <h5 class="mb-3 text-primary">MiniMax 配置</h5>
+            <div class="row g-3 mb-4">
+                <div class="col-md-6">
+                    <label class="form-label">API Key</label>
+                    <input type="password" class="form-control" id="minimax_api_key">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Group ID</label>
+                    <input type="text" class="form-control" id="minimax_group_id">
+                </div>
             </div>
-            <div class="col-md-6">
-                <label class="form-label">Group ID</label>
-                <input type="text" class="form-control" id="group_id">
+        </div>
+
+        <!-- Volcengine Config -->
+        <div id="config-volcengine" class="provider-config" style="display:none;">
+            <h5 class="mb-3 text-primary">火山引擎配置</h5>
+            <div class="row g-3 mb-4">
+                <div class="col-md-6">
+                    <label class="form-label">App ID</label>
+                    <input type="text" class="form-control" id="volc_app_id">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Access Token / Access Key</label>
+                    <input type="password" class="form-control" id="volc_access_token">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Secret Key (For Async/Signing)</label>
+                    <input type="password" class="form-control" id="volc_secret_key">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Cluster (例如: volcano_tts)</label>
+                    <input type="text" class="form-control" id="volc_cluster" placeholder="volcano_tts">
+                </div>
             </div>
-            <div class="col-12 text-end">
-                <button class="btn btn-outline-info btn-sm" onclick="testConnection()">
-                    <i class="bi bi-wifi"></i> 测试连接
-                </button>
-            </div>
+        </div>
+
+        <div class="text-end mb-4">
+            <button class="btn btn-outline-info btn-sm" onclick="testConnection()">
+                <i class="bi bi-wifi"></i> 测试当前服务商连接
+            </button>
         </div>
 
         <!-- Voice Management -->
         <h5 class="mb-3 text-primary d-flex justify-content-between align-items-center">
-            音色管理
+            音色管理 (当前: <span id="current-provider-label">MiniMax</span>)
             <button class="btn btn-success btn-sm" onclick="addVoiceRow()">
                 <i class="bi bi-plus-lg"></i> 添加音色
             </button>
@@ -86,6 +121,8 @@
 </div>
 
 <script>
+    let globalConfig = {};
+
     // --- Login Logic ---
     async function login() {
         const password = document.getElementById('admin-password').value;
@@ -121,55 +158,96 @@
     async function loadConfig() {
         try {
             const res = await fetch('/api/admin/config');
-            const data = await res.json();
+            globalConfig = await res.json();
 
-            document.getElementById('api_key').value = data.api_key || '';
-            document.getElementById('group_id').value = data.group_id || '';
+            // Set Active Provider
+            const active = globalConfig.active_provider || 'minimax';
+            document.getElementById('active_provider').value = active;
 
-            const tbody = document.getElementById('voice-table-body');
-            tbody.innerHTML = '';
-            (data.voices || []).forEach(v => addVoiceRow(v.name, v.id));
+            // Set MiniMax Config
+            if (globalConfig.minimax) {
+                document.getElementById('minimax_api_key').value = globalConfig.minimax.api_key || '';
+                document.getElementById('minimax_group_id').value = globalConfig.minimax.group_id || '';
+            }
+
+            // Set Volcengine Config
+            if (globalConfig.volcengine) {
+                document.getElementById('volc_app_id').value = globalConfig.volcengine.app_id || '';
+                document.getElementById('volc_access_token').value = globalConfig.volcengine.access_token || '';
+                document.getElementById('volc_secret_key').value = globalConfig.volcengine.secret_key || '';
+                document.getElementById('volc_cluster').value = globalConfig.volcengine.cluster || 'volcano_tts';
+            }
+
+            toggleProviderSettings();
         } catch (e) {
+            console.error(e);
             alert('加载配置失败');
         }
+    }
+
+    function toggleProviderSettings() {
+        const provider = document.getElementById('active_provider').value;
+        document.getElementById('config-minimax').style.display = provider === 'minimax' ? 'block' : 'none';
+        document.getElementById('config-volcengine').style.display = provider === 'volcengine' ? 'block' : 'none';
+        document.getElementById('current-provider-label').innerText = provider === 'minimax' ? 'MiniMax' : '火山引擎';
+
+        renderVoices(provider);
+    }
+
+    function renderVoices(provider) {
+        const tbody = document.getElementById('voice-table-body');
+        tbody.innerHTML = '';
+
+        const voices = (globalConfig.voices && globalConfig.voices[provider]) || [];
+        voices.forEach(v => addVoiceRow(v.name, v.id));
     }
 
     function addVoiceRow(name = '', id = '') {
         const tbody = document.getElementById('voice-table-body');
         const tr = document.createElement('tr');
         tr.innerHTML = `
-            <td><input type="text" class="form-control" placeholder="例如: 男声有声书" value="${name}"></td>
-            <td><input type="text" class="form-control" placeholder="例如: audiobook_male_1" value="${id}"></td>
+            <td><input type="text" class="form-control" placeholder="例如: 男声" value="${name}"></td>
+            <td><input type="text" class="form-control" placeholder="ID" value="${id}"></td>
             <td><button class="btn btn-outline-danger btn-sm" onclick="this.closest('tr').remove()"><i class="bi bi-trash"></i></button></td>
         `;
         tbody.appendChild(tr);
     }
 
     async function saveConfig() {
-        const apiKey = document.getElementById('api_key').value.trim();
-        const groupId = document.getElementById('group_id').value.trim();
+        const activeProvider = document.getElementById('active_provider').value;
 
-        const voices = [];
+        // Harvest current table voices
+        const currentVoices = [];
         document.querySelectorAll('#voice-table-body tr').forEach(tr => {
             const inputs = tr.querySelectorAll('input');
             const name = inputs[0].value.trim();
             const id = inputs[1].value.trim();
             if (name && id) {
-                voices.push({name, id});
+                currentVoices.push({name, id});
             }
         });
 
-        const newConfig = {
-            api_key: apiKey,
-            group_id: groupId,
-            voices: voices
-        };
+        // Update global config object
+        if (!globalConfig.voices) globalConfig.voices = {};
+        globalConfig.voices[activeProvider] = currentVoices;
+
+        globalConfig.active_provider = activeProvider;
+
+        if (!globalConfig.minimax) globalConfig.minimax = {};
+        globalConfig.minimax.api_key = document.getElementById('minimax_api_key').value.trim();
+        globalConfig.minimax.group_id = document.getElementById('minimax_group_id').value.trim();
+
+        if (!globalConfig.volcengine) globalConfig.volcengine = {};
+        globalConfig.volcengine.app_id = document.getElementById('volc_app_id').value.trim();
+        globalConfig.volcengine.access_token = document.getElementById('volc_access_token').value.trim();
+        globalConfig.volcengine.secret_key = document.getElementById('volc_secret_key').value.trim();
+        globalConfig.volcengine.cluster = document.getElementById('volc_cluster').value.trim();
 
         try {
             const res = await fetch('/api/admin/config', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(newConfig)
+                body: JSON.stringify(globalConfig)
             });
             if (res.ok) {
                 alert('配置保存成功！');
@@ -182,19 +260,24 @@
     }
 
     async function testConnection() {
-        const apiKey = document.getElementById('api_key').value.trim();
-        const groupId = document.getElementById('group_id').value.trim();
+        const provider = document.getElementById('active_provider').value;
+        const payload = { provider: provider };
 
-        if (!apiKey) {
-            alert("请先输入 API Key");
-            return;
+        if (provider === 'minimax') {
+            payload.api_key = document.getElementById('minimax_api_key').value.trim();
+            payload.group_id = document.getElementById('minimax_group_id').value.trim();
+        } else {
+            payload.app_id = document.getElementById('volc_app_id').value.trim();
+            payload.access_token = document.getElementById('volc_access_token').value.trim();
+            payload.secret_key = document.getElementById('volc_secret_key').value.trim();
+            payload.cluster = document.getElementById('volc_cluster').value.trim();
         }
 
         try {
             const response = await fetch('/api/check_connection', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ api_key: apiKey, group_id: groupId })
+                body: JSON.stringify(payload)
             });
 
             const data = await response.json();
