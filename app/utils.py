@@ -1,8 +1,12 @@
 from bs4 import BeautifulSoup
 from ebooklib import epub
 import ebooklib
+import logging
+from typing import Optional, BinaryIO
 
-def extract_text_from_epub(file_stream):
+logger = logging.getLogger(__name__)
+
+def extract_text_from_epub(file_stream: BinaryIO | str) -> Optional[str]:
     try:
         book = epub.read_epub(file_stream)
         text_content = []
@@ -14,5 +18,5 @@ def extract_text_from_epub(file_stream):
                 text_content.append(soup.get_text())
         return "\n".join(text_content)
     except Exception as e:
-        print(f"Error parsing EPUB: {e}")
+        logger.error(f"Error parsing EPUB: {e}")
         return None

@@ -1,68 +1,51 @@
-from flask import Blueprint, render_template, request, jsonify, send_file
+from flask import Blueprint, render_template, request, jsonify, send_file, Response
 import io
 import tempfile
 import os
 import binascii
+from typing import Any, Dict, Union, Tuple
 from app.config import config_manager
+from app.services.factory import get_provider
 from app.services.minimax import MinimaxProvider
 from app.services.volcengine_tts import VolcengineProvider
 from app.utils import extract_text_from_epub
 
 main = Blueprint('main', __name__)
 
-def get_provider():
-    config = config_manager.get_all()
-    provider_name = config.get('active_provider', 'minimax')
-
-    if provider_name == 'minimax':
-        return MinimaxProvider(
-            api_key=config['minimax'].get('api_key'),
-            group_id=config['minimax'].get('group_id'),
-            voices=config['voices'].get('minimax', [])
-        )
-    elif provider_name == 'volcengine':
-        return VolcengineProvider(
-            app_id=config['volcengine'].get('app_id'),
-            access_token=config['volcengine'].get('access_token'),
-            secret_key=config['volcengine'].get('secret_key'),
-            cluster=config['volcengine'].get('cluster'),
-            voices=config['voices'].get('volcengine', [])
-        )
-    else:
-        raise ValueError(f"Unknown provider: {provider_name}")
-
 @main.route('/')
-def index():
+def index() -> str:
     provider = get_provider()
     voices = provider.get_voices()
     return render_template('index.html', voices=voices)
 
 @main.route('/admin')
-def admin_page():
+def admin_page() -> str:
     return render_template('admin.html')
 
 @main.route('/api/admin/login', methods=['POST'])
-def admin_login():
-    data = request.json
+def admin_login() -> Tuple[Response, int] | Response:
+    data: Dict[str, Any] = request.json or {}
     password = data.get('password')
     if password == config_manager.get('admin_password', 'admin'):
         return jsonify({'status': 'success'})
     return jsonify({'status': 'failed', 'message': 'Invalid password'}), 401
 
 @main.route('/api/admin/config', methods=['GET', 'POST'])
-def admin_config():
+def admin_config() -> Response:
     if request.method == 'GET':
         return jsonify(config_manager.get_all())
 
     if request.method == 'POST':
-        new_config = request.json
+        new_config: Dict[str, Any] = request.json or {}
         config_manager.update(new_config)
         return jsonify({'status': 'success'})
 
+    return jsonify({'error': 'Method not allowed'}), 405
+
 @main.route('/api/check_connection', methods=['POST'])
-def check_connection():
+def check_connection() -> Tuple[Response, int] | Response:
     # Helper to check connection for current or tested config
-    data = request.json or {}
+    data: Dict[str, Any] = request.json or {}
     # If data provided, temporarily instantiate provider
     # Otherwise use current config
 
@@ -77,17 +60,17 @@ def check_connection():
             # Test specific credentials
             if provider_type == 'minimax':
                 provider = MinimaxProvider(
-                    api_key=data.get('api_key'),
+                    api_key=data.get('api_key', ''),
                     group_id=data.get('group_id'),
                     voices=[]
                 )
                 voice_id = "audiobook_male_1" # Default test
             elif provider_type == 'volcengine':
                 provider = VolcengineProvider(
-                    app_id=data.get('app_id'),
-                    access_token=data.get('access_token'),
+                    app_id=data.get('app_id', ''),
+                    access_token=data.get('access_token', ''),
                     secret_key=data.get('secret_key'),
-                    cluster=data.get('cluster'),
+                    cluster=data.get('cluster', 'volcano_tts'),
                     voices=[]
                 )
                 voice_id = "BV001_streaming" # Default test
@@ -112,7 +95,7 @@ def check_connection():
 
 
 @main.route('/api/upload', methods=['POST'])
-def upload_file():
+def upload_file() -> Tuple[Response, int] | Response:
     provider = get_provider()
 
     if 'file' not in request.files:
@@ -122,7 +105,7 @@ def upload_file():
     if file.filename == '':
         return jsonify({'error': 'No selected file'}), 400
 
-    filename = file.filename.lower()
+    filename: str = file.filename.lower() if file.filename else ''
     file_stream = file.stream
     mimetype = file.mimetype
 
@@ -156,8 +139,8 @@ def upload_file():
         return jsonify({'error': str(e)}), 500
 
 @main.route('/api/generate', methods=['POST'])
-def generate():
-    data = request.json
+def generate() -> Tuple[Response, int] | Response:
+    data: Dict[str, Any] = request.json or {}
     provider = get_provider()
 
     voice_id = data.get('voice_id')
@@ -171,7 +154,9 @@ def generate():
         if not text:
              return jsonify({'error': 'Missing text'}), 400
         try:
-            audio_data = provider.generate_sync(text, voice_id, **data)
+            # Remove keys that are passed explicitly to avoid multiple values error
+            cleaned_data = {k: v for k, v in data.items() if k not in ['text', 'voice_id']}
+            audio_data = provider.generate_sync(text, voice_id, **cleaned_data)
             return send_file(
                 io.BytesIO(audio_data),
                 mimetype='audio/mpeg',
@@ -187,13 +172,15 @@ def generate():
             return jsonify({'error': 'Missing text or file_id'}), 400
 
         try:
-            result = provider.submit_async(text, text_file_id, voice_id, **data)
+            # Remove keys that are passed explicitly
+            cleaned_data = {k: v for k, v in data.items() if k not in ['text', 'text_file_id', 'voice_id']}
+            result = provider.submit_async(text, text_file_id, voice_id, **cleaned_data)
             return jsonify(result)
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
 @main.route('/api/query', methods=['GET'])
-def query():
+def query() -> Tuple[Response, int] | Response:
     task_id = request.args.get('task_id')
     if not task_id:
         return jsonify({'error': 'Missing task_id'}), 400
@@ -206,7 +193,7 @@ def query():
         return jsonify({'error': str(e)}), 500
 
 @main.route('/api/retrieve', methods=['GET'])
-def retrieve():
+def retrieve() -> Tuple[Response, int] | Response:
     file_id = request.args.get('file_id')
     if not file_id:
         return jsonify({'error': 'Missing file_id'}), 400

@@ -1,29 +1,13 @@
 import pytest
-from app import create_app, db, socketio
-from app.models import User
-from config import Config
-
-class TestConfig(Config):
-    TESTING = True
-    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
-    WTF_CSRF_ENABLED = False # Disable CSRF for easier testing
+from app import create_app
 
 @pytest.fixture
 def app():
-    app = create_app(TestConfig)
-
-    with app.app_context():
-        db.create_all()
-        # Create a test admin user
-        user = User(username='admin')
-        user.set_password('admin')
-        db.session.add(user)
-        db.session.commit()
-
-        yield app
-
-        db.session.remove()
-        db.drop_all()
+    app = create_app()
+    app.config.update({
+        "TESTING": True,
+    })
+    yield app
 
 @pytest.fixture
 def client(app):
